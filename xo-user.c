@@ -82,7 +82,7 @@ static void listen_keyboard_handler(void)
     close(attr_fd);
 }
 
-int main(int argc, char *argv[])
+static void run_kernel_mode(void)
 {
     if (!status_check())
         exit(1);
@@ -126,6 +126,34 @@ int main(int argc, char *argv[])
     fcntl(STDIN_FILENO, F_SETFL, flags);
 
     close(device_fd);
+}
+
+static void run_user_mode(void)
+{
+    return;
+}
+
+int main(int argc, char *argv[])
+{
+    enum Mode { MODE_KERNEL, MODE_USER };
+    enum Mode mode = MODE_KERNEL;
+
+    printf("Select AI mode:\n");
+    printf("1. Kernel AI (current default)\n");
+    printf("2. User-space AI (coroutine)\n");
+    printf("Enter choice (1/2): ");
+    fflush(stdout);
+
+    int choice = getchar();
+    if (choice == '2') {
+        mode = MODE_USER;
+    }
+
+    if (mode == MODE_KERNEL) {
+        run_kernel_mode();
+    } else {
+        run_user_mode();
+    }
 
     return 0;
 }

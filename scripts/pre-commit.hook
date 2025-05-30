@@ -5,6 +5,7 @@ CPPCHECK_suppresses="--suppress=unmatchedSuppression \
 --suppress=unmatchedSuppression:main.c \
 --suppress=constParameterPointer:main.c \
 --suppress=constParameterCallback:main.c \
+--suppress=normalCheckLevelMaxBranches \
 --suppress=unusedFunction:main.c"
 CPPCHECK_OPTS="-I. --enable=all --error-exitcode=1 --force $CPPCHECK_suppresses ."
 

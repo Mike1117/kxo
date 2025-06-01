@@ -36,8 +36,10 @@ void schedule(void)
     setjmp(sched);
 
     while (ntasks-- > 0) {
-        struct arg arg = args[i];
-        tasks[i++](&arg);
+        if (args)
+            tasks[i++](&args[i]);
+        else
+            tasks[i++](NULL);
         printf("Never reached\n");
     }
 

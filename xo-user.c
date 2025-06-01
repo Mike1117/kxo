@@ -154,6 +154,11 @@ static int draw_board(char *table)
         draw_buffer[i++] = '\n';
     }
 
+    if (i < DRAWBUFFER_SIZE)
+        draw_buffer[i] = '\0';
+    else
+        draw_buffer[DRAWBUFFER_SIZE - 1] = '\0';
+
     return 0;
 }
 
@@ -180,6 +185,8 @@ static void check_win_work_func(void *arg)
     for (;;) {
         if (check_win(table) != ' ') {
             draw_board(table);
+            printf("\033[H\033[J");
+            printf("%s", draw_buffer);
             memset(table, ' ', N_GRIDS);
         }
 
@@ -250,13 +257,15 @@ static void ai_one_work_func(void *arg)
     }
 
     for (;;) {
-        int move = mcts(table, 'O');
-        if (move != -1)
-            table[move] = 'O';
+        if (turn == 'O') {
+            int move = mcts(table, 'O');
+            if (move != -1)
+                table[move] = 'O';
 
-        turn = 'X';
+            turn = 'X';
+        }
+
         finish = 1;
-
         if (setjmp(task->env) == 0) {
             task_add(task);
             task_switch();
@@ -287,13 +296,15 @@ static void ai_two_work_func(void *arg)
     }
 
     for (;;) {
-        int move;
-        move = negamax_predict(table, 'X').move;
+        if (turn == 'X') {
+            int move;
+            move = negamax_predict(table, 'X').move;
 
-        if (move != -1)
-            table[move] = 'X';
+            if (move != -1)
+                table[move] = 'X';
 
-        turn = 'O';
+            turn = 'O';
+        }
         finish = 1;
 
         if (setjmp(task->env) == 0) {
@@ -397,14 +408,8 @@ static void run_user_mode(void)
         co_listen_keyboard_handler, drawboard_work_func,
         ai_two_work_func,           check_win_work_func,
         co_listen_keyboard_handler, drawboard_work_func};
-    struct arg arg0 = {.n = 1, .i = 0, .task_name = "AI 1"};
-    struct arg arg1 = {.n = 1, .i = 0, .task_name = "AI 2"};
-    struct arg arg2 = {.n = 1, .i = 0, .task_name = "DRAW"};
-    struct arg arg3 = {.n = 1, .i = 0, .task_name = "KEY"};
-    struct arg arg4 = {.n = 1, .i = 0, .task_name = "CHECK"};
-    struct arg registered_arg[] = {arg0, arg1, arg2, arg3, arg4};
     tasks = registered_task;
-    args = registered_arg;
+    args = NULL;
     ntasks = ARRAY_SIZE(registered_task);
 
     schedule();

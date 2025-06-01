@@ -8,6 +8,9 @@
 #include <termios.h>
 #include <unistd.h>
 
+#include "./user_space_ai/mcts.h"
+#include "./user_space_ai/negamax.h"
+#include "coro.h"
 #include "game.h"
 
 #define XO_STATUS_FILE "/sys/module/kxo/initstate"
@@ -128,9 +131,285 @@ static void run_kernel_mode(void)
     close(device_fd);
 }
 
+static char draw_buffer[DRAWBUFFER_SIZE];
+static char turn;
+static int finish;
+#define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
+static char table[N_GRIDS];
+
+static int draw_board(char *table)
+{
+    int i = 0, k = 0;
+    draw_buffer[i++] = '\n';
+    draw_buffer[i++] = '\n';
+
+    while (i < DRAWBUFFER_SIZE) {
+        for (int j = 0; j < (BOARD_SIZE << 1) - 1 && k < N_GRIDS; j++) {
+            draw_buffer[i++] = j & 1 ? '|' : table[k++];
+        }
+        draw_buffer[i++] = '\n';
+        for (int j = 0; j < (BOARD_SIZE << 1) - 1; j++) {
+            draw_buffer[i++] = '-';
+        }
+        draw_buffer[i++] = '\n';
+    }
+
+    return 0;
+}
+
+static void check_win_work_func(void *arg)
+{
+    struct task *new_task = malloc(sizeof(struct task));
+    if (!new_task) {
+        fprintf(stderr, "[xo-user] new_task: memory allocation failed\n");
+        return;
+    }
+    INIT_LIST_HEAD(&new_task->list);
+    if (setjmp(new_task->env) == 0) {
+        task_add(new_task);
+        longjmp(sched, 1);
+    }
+
+    struct task *task = cur_task;
+
+    if (!task) {
+        fprintf(stderr, "[xo-user] task: memory allocation failed\n");
+        free(new_task);
+        return;
+    }
+    for (;;) {
+        if (check_win(table) != ' ') {
+            draw_board(table);
+            memset(table, ' ', N_GRIDS);
+        }
+
+        if (setjmp(task->env) == 0) {
+            task_add(task);
+            task_switch();
+        }
+
+        task = cur_task;
+    }
+}
+
+static void drawboard_work_func(void *arg)
+{
+    struct task *new_task = malloc(sizeof(struct task));
+    if (!new_task) {
+        fprintf(stderr, "[xo-user] new_task: memory allocation failed\n");
+        return;
+    }
+    INIT_LIST_HEAD(&new_task->list);
+    if (setjmp(new_task->env) == 0) {
+        task_add(new_task);
+        longjmp(sched, 1);
+    }
+
+    struct task *task = cur_task;
+    if (!task) {
+        fprintf(stderr, "[xo-user] task: memory allocation failed\n");
+        free(new_task);
+        return;
+    }
+
+    for (;;) {
+        if (finish) {
+            draw_board(table);
+            printf("\033[H\033[J");
+            printf("%s", draw_buffer);
+            finish = 0;
+        }
+
+        if (setjmp(task->env) == 0) {
+            task_add(task);
+            task_switch();
+        }
+
+        task = cur_task;
+    }
+}
+
+static void ai_one_work_func(void *arg)
+{
+    struct task *new_task = malloc(sizeof(struct task));
+    if (!new_task) {
+        fprintf(stderr, "[xo-user] new_task: memory allocation failed\n");
+        return;
+    }
+    INIT_LIST_HEAD(&new_task->list);
+    if (setjmp(new_task->env) == 0) {
+        task_add(new_task);
+        longjmp(sched, 1);
+    }
+
+    struct task *task = cur_task;
+    if (!task) {
+        fprintf(stderr, "[xo-user] task: memory allocation failed\n");
+        free(new_task);
+        return;
+    }
+
+    for (;;) {
+        int move = mcts(table, 'O');
+        if (move != -1)
+            table[move] = 'O';
+
+        turn = 'X';
+        finish = 1;
+
+        if (setjmp(task->env) == 0) {
+            task_add(task);
+            task_switch();
+        }
+
+        task = cur_task;
+    }
+}
+
+static void ai_two_work_func(void *arg)
+{
+    struct task *new_task = malloc(sizeof(struct task));
+    if (!new_task) {
+        fprintf(stderr, "[xo-user] new_task: memory allocation failed\n");
+        return;
+    }
+    INIT_LIST_HEAD(&new_task->list);
+    if (setjmp(new_task->env) == 0) {
+        task_add(new_task);
+        longjmp(sched, 1);
+    }
+
+    struct task *task = cur_task;
+    if (!task) {
+        fprintf(stderr, "[xo-user] task: memory allocation failed\n");
+        free(new_task);
+        return;
+    }
+
+    for (;;) {
+        int move;
+        move = negamax_predict(table, 'X').move;
+
+        if (move != -1)
+            table[move] = 'X';
+
+        turn = 'O';
+        finish = 1;
+
+        if (setjmp(task->env) == 0) {
+            task_add(task);
+            task_switch();
+        }
+
+        task = cur_task;
+    }
+}
+
+static void co_listen_keyboard_handler(void *arg)
+{
+    struct task *new_task = malloc(sizeof(struct task));
+    if (!new_task) {
+        fprintf(stderr, "[xo-user] new_task: memory allocation failed\n");
+        return;
+    }
+    INIT_LIST_HEAD(&new_task->list);
+    if (setjmp(new_task->env) == 0) {
+        task_add(new_task);
+        longjmp(sched, 1);
+    }
+
+    struct task *task = cur_task;
+    if (!task) {
+        fprintf(stderr, "[xo-user] task: memory allocation failed\n");
+        free(new_task);
+        return;
+    }
+
+    static int paused = 0;
+    for (;;) {
+        char input;
+        ssize_t nread = read(STDIN_FILENO, &input, 1);
+
+        if (nread == 1) {
+            int attr_fd = open(XO_DEVICE_ATTR_FILE, O_RDWR);
+            if (attr_fd < 0) {
+                perror(
+                    "co_listen_keyboard_handler: open XO_DEVICE_ATTR_FILE "
+                    "failed");
+            } else {
+                char buf[20];
+                switch (input) {
+                case 16:
+                    paused ^= 1;
+                    if (paused) {
+                        printf(
+                            "\n\n[Paused] Press Ctrl-P again to resume...\n");
+                        while (1) {
+                            ssize_t b = read(STDIN_FILENO, &input, 1);
+                            if (b == 1 && input == 16) {
+                                paused = 0;
+                                printf("[Resumed]\n");
+                                break;
+                            }
+                        }
+                    }
+                    break;
+                case 17: /* Ctrl-Q */
+                    if (read(attr_fd, buf, 6) == 6) {
+                        buf[4] = '1';
+                        read_attr = false;
+                        end_attr = true;
+                        write(attr_fd, buf, 6);
+                        printf(
+                            "\n\nStopping the kernel space tic-tac-toe game "
+                            "(or user space if modified)...\n");
+                        exit(0);
+                    }
+                    break;
+                }
+                close(attr_fd);
+            }
+        } else if (nread == -1) {
+        }
+
+        if (setjmp(task->env) == 0) {
+            task_add(task);
+            task_switch();
+        }
+        task = cur_task;
+    }
+}
+
+
 static void run_user_mode(void)
 {
-    return;
+    negamax_init();
+    mcts_init();
+    memset(table, ' ', N_GRIDS);
+    turn = 'O';
+    finish = 1;
+
+    raw_mode_enable();
+    int flags = fcntl(STDIN_FILENO, F_GETFL, 0);
+    fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK);
+    void (*registered_task[])(void *) = {
+        ai_one_work_func,           check_win_work_func,
+        co_listen_keyboard_handler, drawboard_work_func,
+        ai_two_work_func,           check_win_work_func,
+        co_listen_keyboard_handler, drawboard_work_func};
+    struct arg arg0 = {.n = 1, .i = 0, .task_name = "AI 1"};
+    struct arg arg1 = {.n = 1, .i = 0, .task_name = "AI 2"};
+    struct arg arg2 = {.n = 1, .i = 0, .task_name = "DRAW"};
+    struct arg arg3 = {.n = 1, .i = 0, .task_name = "KEY"};
+    struct arg arg4 = {.n = 1, .i = 0, .task_name = "CHECK"};
+    struct arg registered_arg[] = {arg0, arg1, arg2, arg3, arg4};
+    tasks = registered_task;
+    args = registered_arg;
+    ntasks = ARRAY_SIZE(registered_task);
+
+    schedule();
+
+    raw_mode_disable();
 }
 
 int main(int argc, char *argv[])

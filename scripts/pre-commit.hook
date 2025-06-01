@@ -6,7 +6,8 @@ CPPCHECK_suppresses="--suppress=unmatchedSuppression \
 --suppress=constParameterPointer:main.c \
 --suppress=constParameterCallback:main.c \
 --suppress=normalCheckLevelMaxBranches \
---suppress=unusedFunction:main.c"
+--suppress=unusedFunction:main.c \
+--suppress=unusedFunction:user_space_ai/user_list.h"
 CPPCHECK_OPTS="-I. --enable=all --error-exitcode=1 --force $CPPCHECK_suppresses ."
 
 RETURN=0

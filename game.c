@@ -1,7 +1,21 @@
+#ifdef __KERNEL__
 #include <linux/slab.h>
+#else
+#include <stdint.h>
+#include <stdlib.h>
+typedef uint64_t u64;
+#endif
 
 #include "game.h"
 
+static inline void *kxo_alloc(size_t size)
+{
+#ifdef __KERNEL__
+    return kzalloc(size, GFP_KERNEL);
+#else
+    return calloc(1, size);
+#endif
+}
 
 const line_t lines[4] = {
     {0, 1, 0, 0, BOARD_SIZE, BOARD_SIZE - GOAL + 1},             // ROW
@@ -58,7 +72,7 @@ fixed_point_t calculate_win_value(char win, char player)
 
 int *available_moves(const char *table)
 {
-    int *moves = kzalloc(N_GRIDS * sizeof(int), GFP_KERNEL);
+    int *moves = kxo_alloc(N_GRIDS * sizeof(int));
     int m = 0;
     for (int i = 0; i < N_GRIDS; i++)
         if (table[i] == ' ')

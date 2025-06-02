@@ -50,3 +50,8 @@ $ sudo rmmod kxo
 
 `kxo` is released under the MIT license. Use of this source code is governed
 by a MIT-style license that can be found in the LICENSE file.
+
+## utils
+
+find . -type f \( -name "*.c" -o -name "*.h" \) -exec clang-format -i {} +
+

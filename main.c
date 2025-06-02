@@ -79,6 +79,7 @@ static struct class *kxo_class;
 static struct cdev kxo_cdev;
 
 static char table[N_GRIDS];
+static u32 compressed_table;
 
 // static char table_buffer[N_GRIDS];
 
@@ -94,13 +95,25 @@ static DEFINE_MUTEX(read_lock);
 /* Wait queue to implement blocking I/O from userspace */
 static DECLARE_WAIT_QUEUE_HEAD(rx_wait);
 
-/* Insert the whole chess board into the kfifo buffer */
-static void produce_board(void)
+static uint32_t compress_table(const char *table)
 {
-    unsigned int len = kfifo_in(&rx_fifo, table, sizeof(table));
-    if (unlikely(len < sizeof(table)))
+    uint32_t bits = 0;
+    for (int i = 0; i < N_GRIDS; i++) {
+        uint32_t v = (table[i] == ' ') ? 0 : (table[i] == 'O' ? 1 : 2);
+        bits |= (v & 0x3) << (i * 2);
+    }
+    return bits;
+}
+
+static void produce_compressed_board(void)
+{
+    compressed_table = compress_table(table);
+    unsigned int len =
+        kfifo_in(&rx_fifo, (const unsigned char *) &compressed_table,
+                 sizeof(compressed_table));
+    if (unlikely(len < sizeof(compressed_table)))
         pr_warn_ratelimited("%s: %zu bytes dropped\n", __func__,
-                            sizeof(table) - len);
+                            sizeof(compressed_table) - len);
 
     pr_debug("kxo: %s: in %u/%u bytes\n", __func__, len, kfifo_len(&rx_fifo));
 }
@@ -151,7 +164,7 @@ static void drawboard_work_func(struct work_struct *w)
 
     /* Store data to the kfifo buffer */
     mutex_lock(&consumer_lock);
-    produce_board();
+    produce_compressed_board();
     mutex_unlock(&consumer_lock);
 
     wake_up_interruptible(&rx_wait);
@@ -318,7 +331,7 @@ static void timer_handler(struct timer_list *__timer)
 
             /* Store data to the kfifo buffer */
             mutex_lock(&consumer_lock);
-            produce_board();
+            produce_compressed_board();
             mutex_unlock(&consumer_lock);
 
             wake_up_interruptible(&rx_wait);

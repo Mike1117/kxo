@@ -18,6 +18,7 @@
 #define XO_DEVICE_ATTR_FILE "/sys/class/kxo/kxo/kxo_state"
 
 static char draw_buffer[DRAWBUFFER_SIZE];
+static uint32_t compressed_table;
 
 static bool status_check(void)
 {
@@ -87,6 +88,14 @@ static void listen_keyboard_handler(void)
     close(attr_fd);
 }
 
+static void decompress_table(uint32_t bits, char *table)
+{
+    for (int i = 0; i < N_GRIDS; i++) {
+        uint32_t v = (bits >> (i * 2)) & 0x3;
+        table[i] = (v == 0) ? ' ' : (v == 1) ? 'O' : 'X';
+    }
+}
+
 static int draw_board(char *table)
 {
     int i = 0, k = 0;
@@ -146,7 +155,8 @@ static void run_kernel_mode(void)
         } else if (read_attr && FD_ISSET(device_fd, &readset)) {
             FD_CLR(device_fd, &readset);
             printf("\033[H\033[J"); /* ASCII escape code to clear the screen */
-            read(device_fd, table_buf, N_GRIDS);
+            read(device_fd, &compressed_table, sizeof(compressed_table));
+            decompress_table(compressed_table, table_buf);
             draw_board(table_buf);
             printf("%s", draw_buffer);
         }

@@ -41,6 +41,11 @@ struct kxo_attr {
     rwlock_t lock;
 };
 
+struct kxo_frame {
+    u32 compressed_table;
+    u8 last_move;
+};
+
 static struct kxo_attr attr_obj;
 
 static ssize_t kxo_state_show(struct device *dev,
@@ -79,7 +84,7 @@ static struct class *kxo_class;
 static struct cdev kxo_cdev;
 
 static char table[N_GRIDS];
-static u32 compressed_table;
+static u8 last_move;
 
 // static char table_buffer[N_GRIDS];
 
@@ -107,13 +112,15 @@ static uint32_t compress_table(const char *table)
 
 static void produce_compressed_board(void)
 {
-    compressed_table = compress_table(table);
+    struct kxo_frame frame = {
+        .compressed_table = compress_table(table),
+        .last_move = last_move,
+    };
     unsigned int len =
-        kfifo_in(&rx_fifo, (const unsigned char *) &compressed_table,
-                 sizeof(compressed_table));
-    if (unlikely(len < sizeof(compressed_table)))
+        kfifo_in(&rx_fifo, (const unsigned char *) &frame, sizeof(frame));
+    if (unlikely(len < sizeof(frame)))
         pr_warn_ratelimited("%s: %zu bytes dropped\n", __func__,
-                            sizeof(compressed_table) - len);
+                            sizeof(frame) - len);
 
     pr_debug("kxo: %s: in %u/%u bytes\n", __func__, len, kfifo_len(&rx_fifo));
 }
@@ -199,6 +206,7 @@ static void ai_one_work_func(struct work_struct *w)
 
     WRITE_ONCE(turn, 'X');
     WRITE_ONCE(finish, 1);
+    WRITE_ONCE(last_move, move);
     smp_wmb();
     mutex_unlock(&producer_lock);
     tv_end = ktime_get();
@@ -233,6 +241,7 @@ static void ai_two_work_func(struct work_struct *w)
 
     WRITE_ONCE(turn, 'O');
     WRITE_ONCE(finish, 1);
+    WRITE_ONCE(last_move, move);
     smp_wmb();
     mutex_unlock(&producer_lock);
     tv_end = ktime_get();
@@ -332,9 +341,23 @@ static void timer_handler(struct timer_list *__timer)
             put_cpu();
 
             /* Store data to the kfifo buffer */
+            mutex_lock(&producer_lock);
             mutex_lock(&consumer_lock);
             produce_compressed_board();
             mutex_unlock(&consumer_lock);
+            mutex_unlock(&producer_lock);
+
+
+            struct kxo_frame end_frame = {
+                .compressed_table = compress_table(table),
+                .last_move = 17,
+            };
+            mutex_lock(&producer_lock);
+            mutex_lock(&consumer_lock);
+            kfifo_in(&rx_fifo, (const unsigned char *) &end_frame,
+                     sizeof(end_frame));
+            mutex_unlock(&consumer_lock);
+            mutex_unlock(&producer_lock);
 
             wake_up_interruptible(&rx_wait);
         }

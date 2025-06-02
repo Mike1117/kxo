@@ -17,8 +17,101 @@
 #define XO_DEVICE_FILE "/dev/kxo"
 #define XO_DEVICE_ATTR_FILE "/sys/class/kxo/kxo/kxo_state"
 
+struct kxo_frame {
+    uint32_t compressed_table;
+    uint8_t last_move;
+};
+
 static char draw_buffer[DRAWBUFFER_SIZE];
 static uint32_t compressed_table;
+static uint8_t last_move;
+static char last_cor[2];
+struct kxo_frame frame;
+
+
+#define MOVES_PER_GAME 16
+static uint8_t **move_log = NULL;
+static int *move_counts = NULL;
+static int num_games = 0;
+static int capacity = 0;
+
+static void ensure_capacity()
+{
+    if (num_games >= capacity) {
+        capacity = capacity ? capacity * 2 : 8;
+
+        uint8_t **new_log = realloc(move_log, sizeof(uint8_t *) * capacity);
+        if (!new_log) {
+            fprintf(stderr, "realloc failed for move_log\n");
+            return;
+        }
+        move_log = new_log;
+
+        int *new_counts = realloc(move_counts, sizeof(int) * capacity);
+        if (!new_counts) {
+            fprintf(stderr, "realloc failed for move_counts\n");
+            return;
+        }
+        move_counts = new_counts;
+
+        for (int i = num_games; i < capacity; i++) {
+            move_log[i] = malloc(sizeof(uint8_t) *
+                                 MOVES_PER_GAME);  // At most 16 moves a game
+            move_counts[i] = 0;
+        }
+    }
+}
+
+static void new_game()
+{
+    num_games++;
+    ensure_capacity();
+}
+
+static void log_move(uint8_t move)
+{
+    ensure_capacity();
+    if (move == 17 && move_counts[num_games] > 0) {
+        new_game();
+        return;
+    }
+    int n = move_counts[num_games];
+    if (n < MOVES_PER_GAME && (n == 0 || move_log[num_games][n - 1] != move)) {
+        move_log[num_games][move_counts[num_games]++] = move;
+    }
+}
+
+static void move_to_coordinate(int move, char *buf)
+{
+    int col = move % BOARD_SIZE;
+    int row = move / BOARD_SIZE;
+    buf[0] = 'A' + col;  // 'A' ~ 'D'
+    buf[1] = '1' + row;  // '1' ~ '4'
+    buf[2] = '\0';
+}
+
+static void print_move_log()
+{
+    for (int g = 0; g < num_games; g++) {
+        printf("Game %d: ", g + 1);
+        for (int i = 0; i < move_counts[g]; i++) {
+            char buf[3];
+            move_to_coordinate(move_log[g][i], buf);
+            printf("%s", buf);
+            if (i < move_counts[g] - 1)
+                printf(" -> ");
+        }
+        printf("\n");
+    }
+}
+
+static void free_move_log()
+{
+    for (int i = 0; i < capacity; i++)
+        free(move_log[i]);
+    free(move_log);
+    free(move_counts);
+}
 
 static bool status_check(void)
 {
@@ -82,6 +175,8 @@ static void listen_keyboard_handler(void)
             end_attr = true;
             write(attr_fd, buf, 6);
             printf("\n\nStopping the kernel space tic-tac-toe game...\n");
+            print_move_log();
+            free_move_log();
             break;
         }
     }
@@ -155,10 +250,11 @@ static void run_kernel_mode(void)
         } else if (read_attr && FD_ISSET(device_fd, &readset)) {
             FD_CLR(device_fd, &readset);
             printf("\033[H\033[J"); /* ASCII escape code to clear the screen */
-            read(device_fd, &compressed_table, sizeof(compressed_table));
-            decompress_table(compressed_table, table_buf);
+            read(device_fd, &frame, sizeof(frame));
+            decompress_table(frame.compressed_table, table_buf);
             draw_board(table_buf);
             printf("%s", draw_buffer);
+            log_move(frame.last_move);
         }
     }
 

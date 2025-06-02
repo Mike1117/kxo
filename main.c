@@ -163,9 +163,11 @@ static void drawboard_work_func(struct work_struct *w)
     read_unlock(&attr_obj.lock);
 
     /* Store data to the kfifo buffer */
+    mutex_lock(&producer_lock);
     mutex_lock(&consumer_lock);
     produce_compressed_board();
     mutex_unlock(&consumer_lock);
+    mutex_unlock(&producer_lock);
 
     wake_up_interruptible(&rx_wait);
 }

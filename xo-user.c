@@ -6,6 +6,7 @@
 #include <string.h>
 #include <sys/select.h>
 #include <termios.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "./user_space_ai/mcts.h"
@@ -34,6 +35,14 @@ static uint8_t **move_log = NULL;
 static int *move_counts = NULL;
 static int num_games = 0;
 static int capacity = 0;
+static time_t start_time;
+
+static void display_time()
+{
+    time_t now = time(NULL);
+    int elapsed = (int) difftime(now, start_time);
+    printf("\nElapsed Time: %d seconds\n", elapsed);
+}
 
 static void ensure_capacity()
 {
@@ -254,6 +263,7 @@ static void run_kernel_mode(void)
             decompress_table(frame.compressed_table, table_buf);
             draw_board(table_buf);
             printf("%s", draw_buffer);
+            display_time();
             log_move(frame.last_move);
         }
     }
@@ -540,6 +550,7 @@ int main(int argc, char *argv[])
         mode = MODE_USER;
     }
 
+    start_time = time(NULL);
     if (mode == MODE_KERNEL) {
         run_kernel_mode();
     } else {
